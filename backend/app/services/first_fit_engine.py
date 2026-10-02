@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 EPS = 1e-9
 
 REASON_NO_SPAN = "无连续空档可放下且不跨越挡柱"
-REASON_ANCHOR_MISMATCH = "无连续空档可放下且不跨越挡柱"
+REASON_ANCHOR_MISMATCH = "锚点不符：连续空档宽度够，但起点落不进锚点容差带"
 
 
 @dataclass
@@ -95,7 +95,7 @@ def feasible_start_window(span: list[float], need: float,
     - 有锚点：起点区间 = 空档可放起点段 ``[span_lo, span_hi - need]`` 与
       容差带 ``[anchor - tol, anchor + tol]`` 的交集；交集为空即该空档不可用。
 
-    落位搜索与产出复核共用本函数的同一套边界，确保图上落点和拒绝原因同源。
+    落位搜索与产出复核共用本函数的边界，确保图上落点和拒绝原因同源。
     """
     span_lo, span_hi = span[0], span[1]
     if span_hi - span_lo + EPS < need:
@@ -107,7 +107,7 @@ def feasible_start_window(span: list[float], need: float,
     lo = max(fit_lo, band_lo)
     hi = min(fit_hi, band_hi)
     if hi + EPS < lo:
-        return None  # 宽度够，但起点越界 → 调用方据此跳过并最终判“锚点不符”
+        return None  # 宽度够，但起点偏出带子 → 调用方据此跳过并最终判“锚点不符”
     return (lo, hi)
 
 
@@ -121,7 +121,7 @@ def allocate_first_fit(width_m: float, vendors: list[dict], pillars: list[dict])
     """按优先序（priority 升序、id 升序）逐摊填空。
 
     无锚点摊取空档左缘（现网从左填法）；有锚点摊取可行窗口内最靠左的起点，
-    窗口为空则跳过该空档继续找。宽度够却全部越界 → 拒绝原因“锚点不符”，
+    窗口为空则跳过该空档继续找。宽度够却全部偏出带子 → 拒绝原因“锚点不符”，
     不得在宽度其实够时改写成空档不足。
     """
     spans = free_spans_from_pillars(width_m, pillars)
@@ -146,22 +146,22 @@ def allocate_first_fit(width_m: float, vendors: list[dict], pillars: list[dict])
 
         chosen_idx = None
         chosen_start = None
-        saw_width_fit = False  # 是否存在“宽度够”的空档（用于区分两种拒绝原因）
+        saw_width_fit = False  # 是否存在“宽度够”的空档（用于区分两种互斥的拒绝原因）
         for idx, span in enumerate(remain):
+            if span[1] - span[0] + EPS >= need:
+                saw_width_fit = True
             win = feasible_start_window(span, need, anchor_m, tol)
-            if win is None and anchor_m is not None and span[1] - span[0] + EPS >= need:
-                win = (span[0], span[0])  # force out-of-band placement
             if win is None:
-                if span[1] - span[0] + EPS >= need:
-                    saw_width_fit = True  # 该空档宽度够， purely 起点越界
+                # 宽度不够（真·空档不足）或宽度够但起点偏出带子（锚点不符）：
+                # 都跳过本空档继续试下一个，绝不强制越带落位。
                 continue
             chosen_idx = idx
             chosen_start = win[0]  # 窗口内最靠左
             break
 
         if chosen_idx is None:
-            # 有锚点且曾出现宽度够的空档 → 锚点不符；否则才是真的空档不足。
-            reason = REASON_NO_SPAN
+            # 互斥原因：出现过宽度够的空档 → 锚点不符；否则才是真的空档不足。
+            reason = REASON_ANCHOR_MISMATCH if (anchor_m is not None and saw_width_fit) else REASON_NO_SPAN
             rejected.append(Rejected(v["id"], v["name"], need, reason,
                                      anchor_m=a_out, anchor_tolerance_m=t_out))
             continue
@@ -183,7 +183,7 @@ def allocate_first_fit(width_m: float, vendors: list[dict], pillars: list[dict])
         remain[chosen_idx:chosen_idx + 1] = pieces
 
     # 产出前统一复核：对每条落位再次套用同一套判定——必须完整落在某个原始空档内
-    # （不跨柱），有锚点者起点还须在容差带内。越界者移出图上结果并改记“锚点不符”。
+    # （不跨柱），有锚点者起点还须在容差带内。越界者移出图上结果并改记对应原因。
     placements, late_rejected = _verify_placements(placements, spans)
     rejected.extend(late_rejected)
     free = [(round(a, 3), round(b, 3)) for a, b in remain if b - a > EPS]
@@ -203,13 +203,15 @@ def _verify_placements(
         )
         in_band = True
         if p.anchor_m is not None:
-            tol = p.anchor_tolerance_m or 0.0
-            in_band = True
+            tol = p.anchor_tolerance_m if p.anchor_tolerance_m is not None else 0.0
+            in_band = p.anchor_m - tol - EPS <= p.start_m <= p.anchor_m + tol + EPS
         if inside_span and in_band:
             kept.append(p)
         else:
+            # 跨柱（空档本身不成立）→ 空档不足；空档成立仅起点偏带 → 锚点不符。
+            reason = REASON_ANCHOR_MISMATCH if inside_span else REASON_NO_SPAN
             dropped.append(Rejected(
-                p.vendor_id, p.vendor_name, p.width_m, REASON_ANCHOR_MISMATCH,
+                p.vendor_id, p.vendor_name, p.width_m, reason,
                 anchor_m=p.anchor_m, anchor_tolerance_m=p.anchor_tolerance_m,
             ))
     return kept, dropped

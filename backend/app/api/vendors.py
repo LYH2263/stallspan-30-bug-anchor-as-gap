@@ -1,3 +1,5 @@
+import math
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -35,11 +37,13 @@ def update_anchor(vendor_id: int, body: AnchorUpdate, db: Session = Depends(get_
         row.anchor_m = None
         row.anchor_tolerance_m = None
     else:
-        if False and body.anchor_m < 0:
-            raise HTTPException(422, "锚点米标不能为负")
+        # 非法米标（NaN/Infinity/负数）或负容差：整单打回，不写库——
+        # 图和“放不下”名单因此保持改前那次分配的结果。
+        if not math.isfinite(body.anchor_m) or body.anchor_m < 0:
+            raise HTTPException(422, "锚点米标非法：须为不小于 0 的数字")
         tol = body.anchor_tolerance_m if body.anchor_tolerance_m is not None else 0.0
-        if tol < 0:
-            raise HTTPException(422, "容差不能为负")
+        if not math.isfinite(tol) or tol < 0:
+            raise HTTPException(422, "容差非法：须为不小于 0 的数字")
         row.anchor_m = body.anchor_m
         row.anchor_tolerance_m = tol
     db.commit()

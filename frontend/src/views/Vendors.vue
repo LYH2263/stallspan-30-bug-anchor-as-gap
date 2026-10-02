@@ -24,14 +24,24 @@ const drafts = ref<Record<number, { anchor: string; tol: string }>>({})
 async function save(r: any) {
   const d = drafts.value[r.id]
   const anchorRaw = d.anchor.trim()
+  // 非法输入在发请求前整单打回：不改本地已保存值、不发 PATCH，
+  // 图与“放不下”名单自然停留在改前那次分配结果。
+  if (anchorRaw !== '') {
+    const anchor = Number(anchorRaw)
+    const tol = Number(d.tol.trim() || '0')
+    if (!Number.isFinite(anchor) || anchor < 0) {
+      alert('期望锚点米标非法：须填不小于 0 的数字（留空表示无锚点）')
+      return
+    }
+    if (!Number.isFinite(tol) || tol < 0) {
+      alert('容差非法：须填不小于 0 的数字')
+      return
+    }
+  }
   const payload =
     anchorRaw === ''
       ? { anchor_m: null, anchor_tolerance_m: null }
-      : { anchor_m: Number(anchorRaw), anchor_tolerance_m: Number(d.tol || '0') }
-  if (anchorRaw !== '' && (Number.isNaN(payload.anchor_m) || Number.isNaN(payload.anchor_tolerance_m))) {
-    alert('锚点米标与容差必须是数字')
-    return
-  }
+      : { anchor_m: Number(anchorRaw), anchor_tolerance_m: Number(d.tol.trim() || '0') }
   saving.value = r.id
   try {
     const updated = await api(`/vendors/${r.id}`, {
