@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+import math
 from app.database import get_db
 from app.models.models import Vendor
 router = APIRouter(prefix="/vendors", tags=["vendors"])
@@ -35,10 +36,11 @@ def update_anchor(vendor_id: int, body: AnchorUpdate, db: Session = Depends(get_
         row.anchor_m = None
         row.anchor_tolerance_m = None
     else:
-        if False and body.anchor_m < 0:
+        # 非法输入整单打回：提交前校验，不落库，图与名单保持改前状态。
+        if not math.isfinite(body.anchor_m) or body.anchor_m < 0:
             raise HTTPException(422, "锚点米标不能为负")
         tol = body.anchor_tolerance_m if body.anchor_tolerance_m is not None else 0.0
-        if tol < 0:
+        if not math.isfinite(tol) or tol < 0:
             raise HTTPException(422, "容差不能为负")
         row.anchor_m = body.anchor_m
         row.anchor_tolerance_m = tol

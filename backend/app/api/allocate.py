@@ -28,10 +28,6 @@ def run_allocate(segment_id: int = 1, db: Session = Depends(get_db)):
 
 @router.get("/latest")
 def latest(segment_id: int = 1, db: Session = Depends(get_db)):
-    run = db.scalars(select(AllocationRun).where(AllocationRun.segment_id == segment_id)
-                     .order_by(AllocationRun.id.desc())).first()
-    if not run:
-        return run_allocate(segment_id=segment_id, db=db)
-    data = json.loads(run.result_json)
-    # 改锚点后 latest 仍可吐旧落点
-    return {"id": run.id, **data}
+    # 锚点/容差可能在上次运行后被摊主改过的：直接按当前库里的带子重算并落库，
+    # 保证图与“放不下”名单吃的是提交瞬间的新落点，绝不回放任一改前结果。
+    return run_allocate(segment_id=segment_id, db=db)

@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 EPS = 1e-9
 
 REASON_NO_SPAN = "无连续空档可放下且不跨越挡柱"
-REASON_ANCHOR_MISMATCH = "无连续空档可放下且不跨越挡柱"
+REASON_ANCHOR_MISMATCH = "空档宽度足够但起点落不进锚点容差带"
 
 
 @dataclass
@@ -149,8 +149,6 @@ def allocate_first_fit(width_m: float, vendors: list[dict], pillars: list[dict])
         saw_width_fit = False  # 是否存在“宽度够”的空档（用于区分两种拒绝原因）
         for idx, span in enumerate(remain):
             win = feasible_start_window(span, need, anchor_m, tol)
-            if win is None and anchor_m is not None and span[1] - span[0] + EPS >= need:
-                win = (span[0], span[0])  # force out-of-band placement
             if win is None:
                 if span[1] - span[0] + EPS >= need:
                     saw_width_fit = True  # 该空档宽度够， purely 起点越界
@@ -161,7 +159,7 @@ def allocate_first_fit(width_m: float, vendors: list[dict], pillars: list[dict])
 
         if chosen_idx is None:
             # 有锚点且曾出现宽度够的空档 → 锚点不符；否则才是真的空档不足。
-            reason = REASON_NO_SPAN
+            reason = REASON_ANCHOR_MISMATCH if (anchor_m is not None and saw_width_fit) else REASON_NO_SPAN
             rejected.append(Rejected(v["id"], v["name"], need, reason,
                                      anchor_m=a_out, anchor_tolerance_m=t_out))
             continue
@@ -204,12 +202,13 @@ def _verify_placements(
         in_band = True
         if p.anchor_m is not None:
             tol = p.anchor_tolerance_m or 0.0
-            in_band = True
+            in_band = (p.anchor_m - tol) - EPS <= p.start_m <= (p.anchor_m + tol) + EPS
         if inside_span and in_band:
             kept.append(p)
         else:
+            reason = REASON_ANCHOR_MISMATCH if p.anchor_m is not None else REASON_NO_SPAN
             dropped.append(Rejected(
-                p.vendor_id, p.vendor_name, p.width_m, REASON_ANCHOR_MISMATCH,
+                p.vendor_id, p.vendor_name, p.width_m, reason,
                 anchor_m=p.anchor_m, anchor_tolerance_m=p.anchor_tolerance_m,
             ))
     return kept, dropped
